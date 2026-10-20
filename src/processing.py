@@ -65,8 +65,59 @@ class DataProcessor:
             df_events = pd.read_csv(os.getenv('DB_E_LINK'))
             df = df_orders.merge(df_events, on = 'event_id', how = 'left')
             df = df.rename(columns = {'created_dt_msk': 'order_dt', 'created_ts_msk': 'order_ts'})
-            needed_columns = ['user_id', 'device_type_canonical', 'order_id', 'order_dt', 'currency_code', 'revenue', 'tickets_count', 'days_since_prev', 'event_id', 'event_name', 'event_type_main', 'service_name', 'region_name', 'city_name']
+            needed_columns = ['user_id', 'device_type_canonical', 'order_id', 'order_dt', 'order_ts', 'currency_code', 'revenue', 'tickets_count', 'days_since_prev', 'event_id', 'event_name', 'event_type_main', 'service_name', 'region_name', 'city_name']
             valid_columns = [col for col in needed_columns if col in df.columns]
             df = df[valid_columns]
+            df['order_dt'] = pd.to_datetime(df['order_dt'])
+            df['order_ts'] = pd.to_datetime(df['order_ts'])
         return df
     
+    def load_converter_df(self):
+        tenge_df = pd.read_csv("../data/final_tickets_tenge_df.csv")
+        return tenge_df
+
+    def clean_data(self, df, tenge_df):
+
+        tenge_df['data'] = pd.to_datetime(tenge_df['data'])
+        rate_dict = tenge_df.set_index('data')['curs'].to_dict()
+        df['revenue_rub'] = np.where(df['currency_code'] == 'kzt',
+                             df['revenue'] * (df['order_dt'].map(rate_dict) / 100),
+                             df['revenue']
+                             )
+        
+        df['tickets_count'] = df['tickets_count'].astype('int8')
+        df['order_id'] = df['order_id'].astype('int32')
+        df['event_id'] = df['event_id'].astype('int32')
+        df['days_since_prev'] = df['days_since_prev'].astype('Int16')
+
+        for col in ['revenue', 'revenue_rub']:
+            df[col] = df[col].astype('float32')
+
+        for col in [ 
+            "device_type_canonical",
+            "currency_code",
+            "event_type_main",
+            "service_name",
+            "region_name",
+            "city_name"
+            ]:
+                df[col] = df[col].astype('category')
+
+        init_rows = len(df)
+
+        df = df[df['revenue_rub'] >= 0]
+        df = df[df['revenue_rub'] <= df['revenue_rub'].quantile(0.99)].reset_index(drop=True)
+
+        print(f"Исходное кол-во заказов: {init_rows}")
+        print(f"Количество заказов после фильтрации: {len(df)}")
+        print(f"Удалено анамальных заказов: {init_rows - len(df)}")
+        print(f"Доля удаленных данных: {(((init_rows - len(df))/init_rows) * 100):.2f}%")
+
+        return df
+
+
+
+
+
+
+        
