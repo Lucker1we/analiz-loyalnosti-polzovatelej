@@ -15,6 +15,7 @@ class DataProcessor:
         pass
 
     def load_db(self, sql_base:bool = False):
+        load_dotenv()
         if sql_base:
             print('Загрузка датасета из базы данных...')
 
@@ -23,7 +24,7 @@ class DataProcessor:
                 'host': os.getenv('DB_HOST'),
                 'port': os.getenv('DB_PORT'), # порт подключения
                 'db': os.getenv('DB_NAME') # название базы данных
-                }
+            }
             
             connection_string = 'postgresql://{}:{}@{}:{}/{}'.format(
                 db_config['user'],
@@ -31,7 +32,7 @@ class DataProcessor:
                 db_config['host'],
                 db_config['port'],
                 db_config['db'],
-                )
+            )
             
             engine = create_engine(connection_string)
 
@@ -72,10 +73,13 @@ class DataProcessor:
             df = df[valid_columns]
             df['order_dt'] = pd.to_datetime(df['order_dt'])
             df['order_ts'] = pd.to_datetime(df['order_ts'])
+        print("Датасет успешно загружен")
         return df
     
     def load_converter_df(self):
-        tenge_df = pd.read_csv("../data/final_tickets_tenge_df.csv")
+        print('Загрузка конвертера валют...')
+        tenge_df = pd.read_csv("data/final_tickets_tenge_df.csv")
+        print('Конвертер валют успешно загружен')
         return tenge_df
 
     def clean_data(self, df:pd.DataFrame, tenge_df:pd.DataFrame):
@@ -258,7 +262,10 @@ class DataProcessor:
         if show_plots:
             plt.show()
 
-        print('Исследование временных характеристик первого зказа и их влияния на повторные покупки')
+        print('Исследование временных характеристик первого заказа и их влияния на повторные покупки')
+        
+        user_profiles['order_day_name'] = user_profiles['first_order_dt'].dt.day_name()
+
         plt.figure(figsize=(12,7))
 
         days_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
