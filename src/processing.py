@@ -153,7 +153,7 @@ class DataProcessor:
 
         init_len = len(user_profiles)
         user_profiles = user_profiles[user_profiles['total_orders']<= user_profiles['total_orders'].quantile(0.99)]
-        print('Исключено анамальных пользователей пользователей: ', old_len - filtred_len)
+        print('Исключено анамальных пользователей пользователей: ', init_len - len(user_profiles))
 
         print('Общая информация по данным пользовательский профилей:')
         print(user_profiles.info())
@@ -183,7 +183,7 @@ class DataProcessor:
             segment['share'] = (segment['user_count']/total_users).round(2)
             segment = segment.sort_values(by= 'user_count', ascending = False).reset_index()
             print(f"Расчёт пользователей по сегенту {col}: ")
-            display(segment)
+            print(segment)
             print()
 
         print('Анализ вернувшихся пользователей')
