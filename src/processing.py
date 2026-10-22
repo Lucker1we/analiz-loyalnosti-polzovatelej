@@ -16,6 +16,7 @@ class DataProcessor:
 
     def load_db(self, sql_base:bool = False):
         if sql_base:
+            print('Загрузка датасета из базы данных...')
 
             db_config = {'user': os.getenv('DB_USER'), # имя пользователя
                 'pwd': os.getenv('DB_PWD'), # пароль
@@ -61,6 +62,7 @@ class DataProcessor:
             df = pd.read_sql_query(query, con=engine)
 
         else:
+            print('Загрузка датасета по ссылке...')
             df_orders = pd.read_csv(os.getenv('DB_O_LINK'))
             df_events = pd.read_csv(os.getenv('DB_E_LINK'))
             df = df_orders.merge(df_events, on = 'event_id', how = 'left')
@@ -76,8 +78,11 @@ class DataProcessor:
         tenge_df = pd.read_csv("../data/final_tickets_tenge_df.csv")
         return tenge_df
 
-    def clean_data(self, df, tenge_df):
+    def clean_data(self, df:pd.DataFrame, tenge_df:pd.DataFrame):
 
+        print("Изначальный датасет:")
+        print(df.info())
+        
         tenge_df['data'] = pd.to_datetime(tenge_df['data'])
         rate_dict = tenge_df.set_index('data')['curs'].to_dict()
         df['revenue_rub'] = np.where(df['currency_code'] == 'kzt',
@@ -103,21 +108,209 @@ class DataProcessor:
             ]:
                 df[col] = df[col].astype('category')
 
+
         init_rows = len(df)
+
+        duplcate_cols =  [
+            'user_id', 'device_type_canonical', 'order_ts', 'currency_code', 'revenue', 'tickets_count',
+            'event_id', 'event_name', 'event_type_main', 'service_name', 'region_name', 'city_name', 'revenue_rub'
+        ]
+
+        duplicates = df.duplicated(subset=duplcate_cols).sum()
+        df = df.drop_duplicates(subset=duplcate_cols, keep='first')         
+
 
         df = df[df['revenue_rub'] >= 0]
         df = df[df['revenue_rub'] <= df['revenue_rub'].quantile(0.99)].reset_index(drop=True)
 
         print(f"Исходное кол-во заказов: {init_rows}")
         print(f"Количество заказов после фильтрации: {len(df)}")
-        print(f"Удалено анамальных заказов: {init_rows - len(df)}")
+        print(f'Найдено {duplicates} дубликатов')
+        print(f"Удалено анамальных заказов: {init_rows - len(df) - duplicates}")
         print(f"Доля удаленных данных: {(((init_rows - len(df))/init_rows) * 100):.2f}%")
+
+        print('Обновлённый датасет:')
+        print(df.info())
 
         return df
 
 
+    def create_profiles(self, df:pd.DataFrame):
+        df = df.sort_values(by = 'order_ts')
+
+        user_profiles = df.groupby('user_id').agg(
+            first_order_dt = ('order_dt', 'first'),
+            last_order_dt = ('order_dt', 'last'),
+            first_device = ('device_type_canonical', 'first'),
+            first_region = ('region_name', 'first'),
+            first_event_type = ('event_type_main', 'first'),
+            total_orders = ('order_id', 'count'),
+            avg_revenue = ('revenue_rub', 'mean'),
+            avg_days_between_orders = ('days_since_prev', 'mean')
+            ).reset_index()
+
+        user_profiles['is_two'] = np.where(user_profiles['total_orders'] >= 2, 1, 0)
+
+        init_len = len(user_profiles)
+        user_profiles = user_profiles[user_profiles['total_orders']<= user_profiles['total_orders'].quantile(0.99)]
+        print('Исключено анамальных пользователей пользователей: ', old_len - filtred_len)
+
+        print('Общая информация по данным пользовательский профилей:')
+        print(user_profiles.info())
+        print(user_profiles.head(5))
 
 
+        print('Базовые показатели по пользователям')
+        print(f"Общее число пользователей: {(user_profiles['user_id'].nunique()):,}")
+        print(f"Средняя выручка с одного заказа: {(user_profiles['avg_revenue'].mean()):.2f} руб.")
+        print(f"Доля пользователей, совершивших 2 и более заказа: {(user_profiles['is_two'].mean()):.2f}")
+        for col in ['total_orders', 'avg_days_between_orders']:
+            print(f'Статстические показатели по параметру {col}:')
+            print(user_profiles[col].describe())
+            print()
 
+        return user_profiles
+
+
+    def retention_analysis(self, user_profiles:pd.DataFrame, show_plots:bool=False):
+
+        print('Изучение пользователей по принзнакам')
+
+        total_users = len(user_profiles)
+
+        for col in ['first_event_type', 'first_device', 'first_region']:
+            segment = user_profiles.groupby(col, observed = False).agg(user_count=('user_id', 'count'))
+            segment['share'] = (segment['user_count']/total_users).round(2)
+            segment = segment.sort_values(by= 'user_count', ascending = False).reset_index()
+            print(f"Расчёт пользователей по сегенту {col}: ")
+            display(segment)
+            print()
+
+        print('Анализ вернувшихся пользователей')
+
+        fig, axes = plt.subplots(3,1, figsize = (12,18))
+
+        for idx, col in enumerate(['first_event_type', 'first_device', 'first_region']):
+            segment_come_back = user_profiles.groupby(col, observed = False). agg(come_back =('is_two', 'mean'), user_count =('user_id', 'count')).reset_index()
+            if col == 'first_region':
+                segment_come_back = segment_come_back.sort_values(by = 'user_count', ascending = False).head(10)
+                segment_come_back['first_region'] = segment_come_back['first_region'].cat.remove_unused_categories()
+            segment_come_back = segment_come_back.sort_values(by = 'come_back', ascending = False)
+            print(f"Доля вернувшихся клиентов по сегменту {col}:")
+            print(segment_come_back)
+            print()
+
+            sns.barplot(data = segment_come_back, x = 'come_back', y = col, ax = axes[idx], palette='viridis', legend = False)
+            axes[idx].set_title(f'Доля совершивших повторный заказ по признаку: {col}')
+            axes[idx].set_xlabel(f'Доля вернувшихся пользователей')
+            axes[idx].set_ylabel(col)
+
+        plt.tight_layout()
+        if show_plots:
+            plt.show()
+
+        print('Влияние типа мероприятия на вероятность возвращения пользователя')
+
+        print(user_profiles.groupby(['first_event_type', 'is_two'])['user_id'].count())
+
+        plt.figure(figsize=(12,7))
+
+        sns.countplot(data= user_profiles, x = 'first_event_type', hue = 'is_two', palette= 'viridis', legend = True, alpha= 0.8,)
+        plt.title('График распределиня пользователей по типу первого мероприятия')
+        plt.xlabel('Тип мероприятия')
+        plt.ylabel('Количество пользователей')
+
+        plt.tight_layout()
+        if show_plots:
+            plt.show()
+
+        print('Влияние региона на вероятность возвращения пользователя')
+        plt.figure(figsize=(12,7))
+
+        top_regions = user_profiles['first_region'].value_counts().head(10).index
+        df_top_regions = user_profiles[user_profiles['first_region'].isin(top_regions)].copy()
+        df_top_regions['first_region'] = df_top_regions['first_region'].cat.remove_unused_categories()
+
+        print(df_top_regions.groupby(['first_region', 'is_two'])['user_id'].count())
+
+        sns.countplot(data = df_top_regions, y = 'first_region', hue = 'is_two', legend = True, alpha = 0.8, palette='viridis')
+        plt.title('График распределния пользователей по региону первой покупки')
+        plt.xlabel('Регион')
+        plt.ylabel('Количество пользователей')
+
+        plt.tight_layout()
+
+        if show_plots:
+            plt.show()
+
+        print('Анализ средней выручки и повторными заказами')
+
+        print('График распределения средней выручки с билета')
+        plt.figure(figsize = (12,7))
+
+        sns.histplot(data = user_profiles, x = 'avg_revenue', hue = 'is_two', bins = 30, palette='coolwarm', legend=True, alpha = 0.7)
+
+        plt.title('Распределение средней выручки с билета')
+        plt.xlabel('Средняя выручка в рублях')
+        plt.ylabel('Количество пользователей')
+
+        plt.tight_layout()
+        if show_plots:
+            plt.show()
+
+        print('Исследование временных характеристик первого зказа и их влияния на повторные покупки')
+        plt.figure(figsize=(12,7))
+
+        days_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        sns.countplot(data = user_profiles.sort_values('order_day_name'), x= 'order_day_name', hue = 'is_two', palette='coolwarm', alpha = 0.7, order= days_order)
+
+        plt.title('Распределение пользователей по дням недели')
+        plt.xlabel('День недели первой покупки')
+        plt.ylabel('Количество пользователей')
+
+        plt.grid(axis = 'y', linestyle = '--', alpha = 0.5)
+
+        plt.tight_layout()
+
+        print(user_profiles.sort_values('order_day_name').groupby(['order_day_name', 'is_two'])['user_id'].count())
+
+        if show_plots:
+            plt.show()
+
+        print('Корреляционный анализ количества покупок и признаков пользователя')
 
         
+        full_phik_matrix = user_profiles[['order_day_name', 'first_device', 'first_region', 'first_event_type', 'avg_revenue', 'avg_days_between_orders', 'total_orders']].phik_matrix() 
+
+        print('Влияние признаков на количество заказов (total_orders):')
+        print(full_phik_matrix.loc['total_orders'].drop('total_orders').sort_values(ascending=False))
+
+        terms = [
+            (user_profiles['total_orders'] == 1),
+            (user_profiles['total_orders'] == 2),
+            ((user_profiles['total_orders'] == 3) | (user_profiles['total_orders'] == 4)),
+            (user_profiles['total_orders'] > 4)
+        ]
+
+        tags = ['1 заказ', '2 заказа', '3-4 заказа', '5 и более заказов']
+
+        user_profiles['total_orders_segment'] = np.select(terms, tags, default='0')
+
+        full_phik_matrix = user_profiles[['order_day_name', 'first_device', 'first_region', 'first_event_type', 'avg_revenue', 'avg_days_between_orders', 'total_orders_segment']].phik_matrix()
+
+        print('Влияние признаков на количество заказов')
+        print(full_phik_matrix.loc['total_orders_segment'].drop('total_orders_segment').sort_values(ascending = False))
+
+        plt.figure(figsize = (10,7))
+
+        sns.heatmap(data = full_phik_matrix.loc[['total_orders_segment']].drop('total_orders_segment',axis = 1), annot = True, cmap = 'coolwarm', fmt='.3f', vmin = 0, vmax = 1)
+
+        plt.title('Корреляция признаков пользователя с сегментами активности')
+
+        plt.tight_layout()
+        if show_plots:
+            plt.show()
+                    
+
+            
+
