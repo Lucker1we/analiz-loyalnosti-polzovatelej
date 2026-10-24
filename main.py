@@ -14,7 +14,7 @@ from src.processing import DataProcessor
 def main():
     analytics = DataProcessor()
 
-    df = analytics.load_db(sql_base=True)
+    df = analytics.load_db()
     tenge_df = analytics.load_converter_df()
     df = analytics.clean_data(df, tenge_df)
     user_profiles = analytics.create_profiles(df)
